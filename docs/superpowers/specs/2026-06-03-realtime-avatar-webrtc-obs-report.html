@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>实时数字人 WebRTC 控制服务核对报告</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --paper: #ffffff;
+      --text: #20242a;
+      --muted: #5c6675;
+      --border: #d9dee7;
+      --accent: #2563eb;
+      --accent-soft: #e8f0ff;
+      --code-bg: #111827;
+      --code-text: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.65;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 72px; }
+    article { background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 40px; }
+    h1, h2, h3 { line-height: 1.25; margin: 0 0 14px; }
+    h1 { font-size: 34px; letter-spacing: -0.02em; margin-bottom: 8px; }
+    h2 { font-size: 24px; margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); }
+    h3 { font-size: 18px; margin-top: 0; }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 5px 0; }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; background: var(--accent-soft); color: var(--accent); padding: 2px 5px; border-radius: 5px; }
+    pre { overflow-x: auto; background: var(--code-bg); color: var(--code-text); padding: 18px; border-radius: 12px; line-height: 1.5; margin: 16px 0; }
+    pre code { color: inherit; background: transparent; padding: 0; border-radius: 0; }
+    .meta { color: var(--muted); margin-bottom: 28px; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .pill { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 13px; background: var(--accent-soft); color: var(--accent); }
+    .callout { background: var(--accent-soft); border: 1px solid #c7d8ff; border-radius: 12px; padding: 16px 18px; margin: 22px 0; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 22px 0; }
+    .card { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: #fff; }
+    .card-muted { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: #f9fafb; }
+    .stat-label { color: var(--muted); font-size: 13px; }
+    .stat-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+    .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 10px; align-items: stretch; }
+    .arrow { color: var(--muted); font-size: 24px; align-self: center; }
+    @media (max-width: 860px) {
+      article { padding: 24px; }
+      .grid, .stats, .flow { grid-template-columns: 1fr; }
+      .arrow { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <div class="pill-row">
+        <span class="pill">核对后报告</span>
+        <span class="pill">Python + aiortc</span>
+        <span class="pill">/avatar/control</span>
+        <span class="pill">WebSocket 控制</span>
+      </div>
+      <h1>实时数字人 WebRTC 控制服务核对报告</h1>
+      <p class="meta">本报告同步我们最终核对后的 specs 信息，用于替换早期“WebRTC OBS 展示页”方向。当前系统范围聚焦于一个控制页面和实时推理音视频播放，不把 OBS 使用方式作为系统设计范围。</p>
+
+      <div class="callout">
+        <strong>最终核对结论：</strong>
+        系统只提供 <code>/avatar/control</code> 控制页面。页面负责连接实时服务、输入文本、开始/停止合成，并播放 WebRTC 同步音视频。OBS 采集方式由使用者自行处理，不纳入本报告和 spec 的功能范围。
+      </div>
+
+      <section class="stats">
+        <div class="card"><div class="stat-label">服务栈</div><div class="stat-value">Python + aiortc</div></div>
+        <div class="card"><div class="stat-label">页面</div><div class="stat-value">/avatar/control</div></div>
+        <div class="card"><div class="stat-label">控制通道</div><div class="stat-value">WebSocket</div></div>
+        <div class="card"><div class="stat-label">并发</div><div class="stat-value">单会话</div></div>
+      </section>
+
+      <h2>1. 背景判断</h2>
+      <p>当前 Duix-Avatar 主流程是离线任务式合成：提交音频和数字人视频，后端异步生成完整视频文件，客户端轮询结果。它不是实时帧流架构。</p>
+      <pre><code>当前离线链路：
+文字 → TTS 生成音频
+上传音频 → 音频文件
+音频文件 + 数字人视频 → submit 异步合成任务
+轮询 query → 获取生成后的视频文件</code></pre>
+      <p>因此，要满足实时文字/音频驱动口型，需要设计一个新的实时服务。该服务的核心不是改造 OBS 接入，而是让推理模块能够产出同步音视频，并通过 WebRTC 在浏览器页面播放。</p>
+
+      <h2>2. 最终确认的系统范围</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>MVP 范围内</h3>
+          <ul>
+            <li>Python 服务，使用 <code>aiortc</code>。</li>
+            <li>WebRTC 服务和实时推理模块运行在同一个 Python 进程。</li>
+            <li>内网 IP:端口访问，无鉴权。</li>
+            <li>只提供一个页面：<code>GET /avatar/control</code>。</li>
+            <li>单会话单客户端。</li>
+            <li>WebSocket 负责信令和会话控制。</li>
+            <li>页面播放 WebRTC 同步音频和视频。</li>
+            <li>页面支持连接、文本输入、开始合成、停止合成、状态展示。</li>
+            <li>文本合成按分段流式架构设计，MVP 可把整段文本作为一个 segment。</li>
+            <li>麦克风输入预留，不在 MVP 实现。</li>
+          </ul>
+        </div>
+        <div class="card-muted">
+          <h3>MVP 范围外</h3>
+          <ul>
+            <li>OBS 专用参数或 OBS 采集行为。</li>
+            <li>公网鉴权、Token、TLS、正式安全策略。</li>
+            <li>多客户端观看。</li>
+            <li>多会话并发。</li>
+            <li>麦克风实时驱动。</li>
+            <li>逐字输入即触发的增量合成。</li>
+            <li>优雅停止，即等待当前 segment 播放完成后再停止。</li>
+            <li>推理服务和 WebRTC 服务拆成独立进程。</li>
+            <li>本地直接访问云端 <code>/dev/videoX</code>。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>3. 核心架构</h2>
+      <pre><code>浏览器
+  GET /avatar/control
+  WS  /api/session
+        |
+        v
+Python Realtime Avatar Service
+  ├─ HTTP 页面服务
+  ├─ WebSocket 会话和信令控制器
+  ├─ aiortc PeerConnection 管理器
+  ├─ 文本分段器和 segment 队列
+  ├─ 实时推理 session
+  └─ WebRTC audio/video tracks</code></pre>
+      <p>页面先点击“连接”，建立 WebSocket 会话和 WebRTC 连接。连接成功后，用户输入文本并点击“开始合成”。推理 session 开始输出同步音视频帧，WebRTC tracks 将其传回页面播放。</p>
+
+      <h2>4. 页面设计</h2>
+      <p>只提供 <code>/avatar/control</code> 页面。该页面既是控制页，也是播放页。</p>
+      <div class="grid">
+        <div class="card">
+          <h3>页面控件</h3>
+          <ul>
+            <li>连接按钮。</li>
+            <li>文本输入区域。</li>
+            <li>开始合成按钮。</li>
+            <li>停止合成按钮。</li>
+            <li>连接状态展示。</li>
+            <li>合成状态展示。</li>
+            <li>音视频播放区域。</li>
+          </ul>
+        </div>
+        <div class="card-muted">
+          <h3>页面约束</h3>
+          <ul>
+            <li>不需要额外 URL 参数。</li>
+            <li>不需要手动断开连接按钮。</li>
+            <li>页面关闭或刷新时释放服务端会话。</li>
+            <li>未开始推理时，页面层显示占位或测试图案。</li>
+            <li>未开始推理时，不伪造推理音视频输出。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h2>5. WebSocket 信令和控制</h2>
+      <p>WebSocket 地址为 <code>WS /api/session</code>。它负责单会话占用、WebRTC offer/answer、开始合成、停止合成、状态推送和异常释放。</p>
+      <pre><code>客户端 → 服务端：
+{ "type": "webrtc.offer", "sdp": "...", "sdpType": "offer" }
+{ "type": "session.start", "text": "要合成的整段文本" }
+{ "type": "session.stop" }
+
+服务端 → 客户端：
+{ "type": "webrtc.answer", "sdp": "...", "sdpType": "answer" }
+{ "type": "session.status", "status": "connected" }
+{ "type": "session.error", "code": "TEXT_EMPTY", "message": "Text must not be empty" }
+{ "type": "segment.status", "segmentId": "seg-1", "status": "streaming" }</code></pre>
+
+      <h2>6. 控制页状态机</h2>
+      <pre><code>idle
+  ↓ 点击连接
+connecting
+  ↓ WebSocket + WebRTC 连接成功
+connected
+  ↓ 输入文本 + 点击开始合成
+starting
+  ↓ 推理开始输出同步音视频
+streaming
+  ↓ 点击停止合成
+stopping
+  ↓ 取消推理并清空队列
+connected
+  ↓ 页面关闭、刷新或连接异常
+idle</code></pre>
+      <p>停止合成只停止当前推理，不断开页面连接。页面关闭或刷新时才释放连接和单会话占用。</p>
+
+      <h2>7. 媒体输出语义</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>连接但未合成</h3>
+          <ul>
+            <li>页面显示占位或测试图案。</li>
+            <li>推理模块不输出伪造音视频。</li>
+            <li>服务可保留内部 WebRTC tracks，但不能把它们当成真实推理输出。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>合成中</h3>
+          <ul>
+            <li>创建推理 session。</li>
+            <li>推理 session 输出同步音频和视频帧。</li>
+            <li>WebRTC audio/video tracks 将数据送到浏览器。</li>
+            <li>页面播放同步音视频。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout"><strong>音视频要求：</strong>MVP 必须同时输出音频和视频。仅视频输出不满足核对后的 spec。</div>
+
+      <h2>8. 文本合成设计</h2>
+      <p>文本合成必须按 segment 架构设计，即使 MVP 先把整段文本当成一个 segment。</p>
+      <pre><code>MVP：
+提交整段文本
+  ↓
+TextSegmenter 生成一个 segment
+  ↓
+SegmentQueue 执行该 segment
+  ↓
+InferenceSession 输出同步音视频
+
+后续：
+按中文/英文标点切分
+按最大长度切分
+支持多个 segment 队列
+支持前一段播放时准备后一段
+支持每段状态回调
+支持优雅停止</code></pre>
+      <p>逐字输入变化立即触发重新合成不在当前设计范围内。</p>
+
+      <h2>9. 停止语义</h2>
+      <p>MVP 使用立即停止：</p>
+      <ul>
+        <li>立即取消当前 inference session。</li>
+        <li>清空 segment 队列。</li>
+        <li>停止当前音频输出。</li>
+        <li>UI 回到 <code>connected</code> 状态。</li>
+        <li>WebSocket 和 WebRTC 连接保留，可再次点击开始合成。</li>
+      </ul>
+      <p>后续可扩展优雅停止：不再接收新 segment，让当前 segment 播放完成后停止。</p>
+
+      <h2>10. 内部模块边界</h2>
+      <pre><code>TextSegmenter
+  输入：文本
+  输出：有序 segments
+
+SegmentQueue
+  输入：segments
+  输出：segment 生命周期事件
+
+InferenceSession
+  输入：segment 文本
+  输出：同步音视频帧
+  控制：start、cancel
+
+MediaTrackBridge
+  输入：推理产生的音视频帧
+  输出：aiortc AudioStreamTrack 和 VideoStreamTrack</code></pre>
+      <p>推理模块不能阻塞 asyncio 事件循环。重计算应放到 executor、worker thread 或独立 worker process 中执行，但 MVP 的服务进程仍保持单进程架构边界。</p>
+
+      <h2>11. 麦克风输入预留</h2>
+      <p>MVP 不实现麦克风实时驱动，但架构需要为后续扩展保留空间。</p>
+      <pre><code>未来麦克风链路：
+浏览器麦克风
+  ↓ WebRTC audio track 或 WebSocket audio chunks
+Python 服务
+  ↓ 实时推理 session
+同步数字人音视频输出
+  ↓ WebRTC 页面播放</code></pre>
+      <p>MVP 页面可以不显示麦克风控件。如果出现占位控件，必须明确禁用或隐藏，避免误认为已支持。</p>
+
+      <h2>12. 验收标准</h2>
+      <ol>
+        <li>用户可以打开 <code>http://&lt;ip&gt;:&lt;port&gt;/avatar/control</code>。</li>
+        <li>页面初始显示 idle 状态和占位播放区域。</li>
+        <li>点击连接后建立单活动会话和 WebRTC 连接。</li>
+        <li>第二个并发客户端不能接管当前活动会话。</li>
+        <li>输入非空文本并点击开始合成后创建 synthesis session。</li>
+        <li>合成运行时服务通过 WebRTC 发送同步音频和视频。</li>
+        <li>页面能同时播放音频和视频。</li>
+        <li>点击停止后立即取消合成，并回到 connected 状态。</li>
+        <li>关闭或刷新页面后释放活动会话。</li>
+        <li>内部文本流程使用 segment 抽象，即使 MVP 只生成一个 segment。</li>
+      </ol>
+
+      <h2>13. 尚未纳入本次核对的开放问题</h2>
+      <ul>
+        <li>真实实时推理模型 API。</li>
+        <li>推理模块输出的音频和视频帧格式。</li>
+        <li>目标延迟预算。</li>
+        <li>浏览器自动播放策略处理。</li>
+        <li>生产环境鉴权。</li>
+        <li>TLS、域名和公网部署。</li>
+        <li>多客户端观看和多会话。</li>
+      </ul>
+
+      <div class="callout"><strong>总结：</strong>核对后的方向是一个面向实时推理的 WebRTC 控制服务，而不是 OBS 集成服务。系统只保证 <code>/avatar/control</code> 页面能够连接、控制合成并播放同步音视频。</div>
+    </article>
+  </main>
+</body>
+</html>
